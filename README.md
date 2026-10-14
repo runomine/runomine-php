@@ -10,13 +10,13 @@ leaves your server, and nothing in the browser needs a cookie or a consent banne
 
 ## Install
 
-From Packagist, once published:
+From Packagist:
 
 ```sh
 composer require runomine/runomine-php
 ```
 
-Until then, from this repository:
+Or straight from this repository:
 
 ```sh
 composer config repositories.runomine '{"type":"vcs","url":"https://github.com/runomine/runomine-php"}'
