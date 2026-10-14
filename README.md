@@ -2,7 +2,7 @@
 
 The PHP library of [runomine](https://runomine.com): cookieless analytics that counts money, not just visits.
 It sends pageviews and business events (signups, purchases, revenue) **from your backend**, so the visitor's IP never
-leaves your server, and nothing in the browser needs a cookie or a consent banner.
+leaves your server, and the library sets nothing in the browser.
 
 - Framework-agnostic `Runomine\Client`, plus a Laravel integration (service provider, middleware, `Rom` facade).
 - PHP 8.2+, `ext-curl` and `ext-json`. No other runtime dependency.
@@ -197,7 +197,9 @@ salt    = hex(HMAC-SHA256(key = token, message = "runomine:" + UTC date))
 visitor = first 16 hex chars of SHA256(salt + "|" + ip + "|" + user_agent + "|" + host)
 ```
 
-so a person counts once per day and site, and can't be followed across days or sites. It is the same value runomine's
+so a person counts once per day and site, and the hash on its own can't follow anyone across days or sites. If you send
+`user` (your own user id), runomine links that user's visits and purchases over time to attribute revenue: that is no
+longer anonymous audience measurement, and it needs its own legal basis. The hash is the same value runomine's
 JS beacon produces, so a site using both counts each person once. `Runomine\VisitorHash::compute()` is public if you
 need it.
 
