@@ -1,0 +1,69 @@
+# Tags vX.Y.Z when VERSION has a version this repository hasn't tagged yet; Packagist builds its versions from the tags.
+# This repository receives snapshot commits on main, so every push is checked; most of them change nothing here.
+# composer.json carries no "version" (Composer reads it from the tag), so VERSION is where the next one is decided.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Is this version new?
+        id: plan
+        run: |
+          set -euo pipefail
+          version=$(tr -d '[:space:]' < VERSION)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|RC)[0-9]*)?$ ]] || { echo "::error::VERSION '$version' isn't X.Y.Z"; exit 1; }
+          if [ -z "$(git ls-remote --tags origin "refs/tags/v$version")" ]; then
+            tag=true; echo "v$version is new: testing, then tagging."
+          else
+            tag=false; echo "v$version is already tagged."
+          fi
+          { echo "version=$version"; echo "tag=$tag"; } >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: plan
+    if: needs.plan.outputs.tag == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        php: ['8.2', '8.4']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl, json
+          coverage: none
+      - run: composer validate --strict
+      - run: composer update --no-interaction --no-progress --prefer-dist
+      - run: vendor/bin/phpunit
+
+  tag:
+    needs: [plan, test]
+    if: needs.plan.outputs.tag == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Tag v${{ needs.plan.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/v$VERSION" -f sha="$GITHUB_SHA" --silent

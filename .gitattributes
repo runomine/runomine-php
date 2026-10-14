@@ -2,3 +2,5 @@
 /phpunit.xml.dist export-ignore
 /.gitignore export-ignore
 /.gitattributes export-ignore
+/VERSION export-ignore
+/.github export-ignore
