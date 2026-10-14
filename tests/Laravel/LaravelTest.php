@@ -275,6 +275,58 @@ final class LaravelTest extends TestCase
         $rom->assertTracked('job_done', fn ($e) => ! array_key_exists('visitor', $e));
     }
 
+    #[DefineEnvironment('romWithoutAutoMiddleware')]
+    public function test_a_pageview_recorded_by_hand_carries_props(): void
+    {
+        Route::middleware('web')->get('/news', function (Request $request) {
+            Rom::pageview($request, ['props' => ['section' => 'news', 'area' => 'public']]);
+
+            return '<h1>news</h1>';
+        });
+        $rom = Rom::fake();
+
+        $this->browse('http://example.com/news')->assertOk();
+
+        $rom->assertPageviewRecorded(fn (array $e) => $e['props'] === ['section' => 'news', 'area' => 'public']
+            && $e['url'] === 'http://example.com/news'
+            && $e['visitor'] === VisitorHash::compute(VisitorHashTest::TOKEN, VisitorHashTest::IP, VisitorHashTest::UA, 'example.com'));
+        self::assertCount(1, $rom->pageviews());
+    }
+
+    public function test_the_middleware_sends_props_a_controller_set(): void
+    {
+        Route::middleware('web')->get('/section', function (Request $request) {
+            $request->attributes->set('runomine.props', ['section' => 'news']);
+
+            return '<h1>news</h1>';
+        });
+        $rom = Rom::fake();
+
+        $this->browse('/section')->assertOk();
+        $this->browse('/pricing')->assertOk();
+
+        [$section, $pricing] = $rom->pageviews();
+        self::assertSame(['section' => 'news'], $section['props']);
+        self::assertArrayNotHasKey('props', $pricing);
+    }
+
+    public function test_samples_through_the_facade_and_the_fake(): void
+    {
+        $rom = Rom::fake();
+        $rom->assertNothingSampled();
+
+        self::assertTrue(Rom::sample(['queue' => ['pending' => 2], 'healthy' => true]));
+        self::assertTrue(Rom::samples([['ts' => '2026-10-13T18:00:00Z', 'data' => ['cpu' => 0.25]]]));
+
+        $rom->assertSampled(fn (array $s) => ($s['data']['healthy'] ?? null) === true)
+            ->assertSampled(fn (array $s) => $s['ts'] === '2026-10-13T18:00:00.000Z' && $s['data'] === ['cpu' => 0.25]);
+        self::assertCount(2, $rom->sampled());
+        $rom->assertNothingTracked()->assertNoPageviews();
+
+        $this->expectException(AssertionFailedError::class);
+        $rom->assertSampled(fn (array $s) => isset($s['data']['missing']));
+    }
+
     public function test_fake_assertions(): void
     {
         $rom = Rom::fake();

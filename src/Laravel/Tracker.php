@@ -56,9 +56,13 @@ class Tracker
 
     /**
      * Record the request as a pageview. The middleware does this for you; call it yourself for pages it doesn't see
-     * (a redirect that is really a landing, say).
+     * (a redirect that is really a landing, say), or to attach props:
      *
-     * @param  array<string, mixed>  $overrides
+     *   Rom::pageview($request, ['props' => ['section' => 'news']]);
+     *
+     * @param  array<string, mixed>  $overrides  url, referrer, ip, user_agent, host, visitor, country, user, ts, and
+     *                                           props (flat, up to 20 keys, string or number values: stored as the
+     *                                           page view's dims).
      * @return array<string, mixed>|null
      */
     public function pageview(?Request $request = null, array $overrides = []): ?array
@@ -115,6 +119,26 @@ class Tracker
         }
 
         return $metadata;
+    }
+
+    /**
+     * Send a sample of the app's own ops numbers to runomine's Live page, at once. See Client::sample().
+     *
+     * @param  array<string, mixed>  $data
+     */
+    public function sample(array $data, \DateTimeInterface|string|int|null $ts = null): bool
+    {
+        return $this->client->sample($data, $ts);
+    }
+
+    /**
+     * Several samples, each ['data' => [...], 'ts' => ...]. See Client::samples().
+     *
+     * @param  iterable<array{data: array<string, mixed>, ts?: \DateTimeInterface|string|int|null}>  $samples
+     */
+    public function samples(iterable $samples): bool
+    {
+        return $this->client->samples($samples);
     }
 
     public function flush(): int

@@ -20,8 +20,10 @@ use WeakReference;
  * queue is full, when the oldest queued event is older than $flushInterval seconds, on destruct and at shutdown.
  * 5xx and 429 answers are retried with a short backoff, then the batch is dropped. Nothing here ever throws.
  *
- * The library sends raw facts only (url, referrer, user agent, visitor hash, country, user). Source, bot and device
- * classification happen in runomine. The visitor's IP is used to compute the hash and is never sent.
+ * The library sends raw facts only (url, referrer, user agent, visitor hash, country, user, props). Source, bot and
+ * device classification happen in runomine. The visitor's IP is used to compute the hash and is never sent.
+ *
+ * Samples (an app's own ops numbers) go to POST {url}/api/v1/samples at once, not through the queue.
  */
 class Client
 {
@@ -32,6 +34,8 @@ class Client
     private readonly string $token;
 
     private readonly string $endpoint;
+
+    private readonly string $samplesEndpoint;
 
     private readonly bool $enabled;
 
@@ -75,7 +79,9 @@ class Client
     ) {
         $this->token = trim((string) ($token ?? self::env('RUNOMINE_TOKEN') ?? ''));
         $url = trim((string) ($url ?? self::env('RUNOMINE_URL') ?? ''));
-        $this->endpoint = rtrim($url !== '' ? $url : self::DEFAULT_URL, '/').'/api/v1/events';
+        $base = rtrim($url !== '' ? $url : self::DEFAULT_URL, '/');
+        $this->endpoint = $base.'/api/v1/events';
+        $this->samplesEndpoint = $base.'/api/v1/samples';
         $enabled ??= self::bool(self::env('RUNOMINE_ENABLED')) ?? true;
         $this->enabled = $enabled && $this->token !== '';
         $this->sender = $sender ?? new CurlSender($timeout);
@@ -160,6 +166,8 @@ class Client
      *  - visitor: a precomputed hash instead of ip
      * A pageview needs a visitor, so one with neither ip nor visitor is dropped.
      *  - ts: DateTimeInterface, ISO 8601 string or Unix seconds (default now)
+     *  - props: like track()'s, flat, up to 20 keys, string or number values. runomine stores them as the page
+     *    view's dims, each key a breakdown and a filter in Traffic (`area` feeds the Areas breakdown).
      *
      * @param  array<string, mixed>  $request
      * @return array<string, mixed>|null The queued event, or null when disabled or invalid.
@@ -178,6 +186,9 @@ class Client
             $event = $this->event('pageview', null, $request, withUserAgent: true);
             if (! isset($event['visitor'])) {
                 return null; // required for pageviews: without ip (or visitor) there is no one to count
+            }
+            if (is_array($request['props'] ?? null) && ($props = self::props($request['props'])) !== []) {
+                $event['props'] = $props;
             }
 
             return $this->push($event);
@@ -228,6 +239,54 @@ class Client
     }
 
     /**
+     * Send one sample of the app's own ops numbers (queue depth, CPU, people on the site right now) to
+     * POST /api/v1/samples, for runomine's Live page. Nested arrays flatten to dotted keys there ("queue.pending"),
+     * booleans count as 0/1 and anything that isn't a number is dropped. One sample per second: sending the same ts
+     * again replaces it.
+     *
+     * Sent at once, not queued (samples come from a scheduler, a few a minute), with the same retries as events.
+     * Returns true when runomine took the request, false when disabled or it failed. Never throws.
+     *
+     * @param  array<string, mixed>  $data
+     * @param  DateTimeInterface|string|int|null  $ts  When it was measured (default now). Any age is fine.
+     */
+    public function sample(array $data, DateTimeInterface|string|int|null $ts = null): bool
+    {
+        return $this->samples([['data' => $data, 'ts' => $ts]]);
+    }
+
+    /**
+     * Send several samples, e.g. a catch-up after an outage: each ['data' => [...], 'ts' => ...], in calls of at
+     * most 500. True when runomine took every call (the ones it judges invalid are reported in its answer, not
+     * here). Never throws.
+     *
+     * @param  iterable<array{data: array<string, mixed>, ts?: DateTimeInterface|string|int|null}>  $samples
+     */
+    public function samples(iterable $samples): bool
+    {
+        try {
+            if (! $this->enabled) {
+                return false;
+            }
+            $rows = [];
+            foreach ($samples as $sample) {
+                if (! is_array($sample) || ! is_array($sample['data'] ?? null)) {
+                    continue;
+                }
+                $rows[] = ['ts' => $this->iso($sample['ts'] ?? null), 'data' => $sample['data'] === [] ? new \stdClass() : $sample['data']];
+            }
+            $ok = true;
+            foreach (array_chunk($rows, self::MAX_BATCH) as $chunk) {
+                $ok = $this->post($this->samplesEndpoint, ['samples' => $chunk]) && $ok;
+            }
+
+            return $ok;
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    /**
      * Events queued and not sent yet.
      *
      * @return list<array<string, mixed>>
@@ -256,7 +315,7 @@ class Client
             $this->queuedAt = null;
 
             foreach (array_chunk($events, $this->batchSize) as $batch) {
-                if ($this->send($batch)) {
+                if ($this->post($this->endpoint, ['events' => $batch])) {
                     $sent += count($batch);
                 }
             }
@@ -269,11 +328,11 @@ class Client
         return $sent;
     }
 
-    /** @param list<array<string, mixed>> $batch */
-    private function send(array $batch): bool
+    /** @param array<string, list<mixed>> $payload */
+    private function post(string $url, array $payload): bool
     {
         $body = json_encode(
-            ['events' => $batch],
+            $payload,
             JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PRESERVE_ZERO_FRACTION,
         );
         if ($body === false) {
@@ -289,7 +348,7 @@ class Client
 
         for ($attempt = 0; ; $attempt++) {
             try {
-                $status = $this->sender->post($this->endpoint, $headers, $body);
+                $status = $this->sender->post($url, $headers, $body);
             } catch (Throwable) {
                 $status = 0;
             }
@@ -329,7 +388,7 @@ class Client
      */
     private function event(string $type, ?string $name, array $data, bool $withUserAgent): array
     {
-        $ts = self::time($data['ts'] ?? null) ?? ($this->clock)();
+        $ts = $this->iso($data['ts'] ?? null);
 
         $url = self::str($data['url'] ?? null);
         $ua = self::str($data['user_agent'] ?? null);
@@ -348,7 +407,7 @@ class Client
             'id' => Uuid::v7(),
             'type' => $type,
             'name' => $name,
-            'ts' => DateTimeImmutable::createFromInterface($ts)->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d\TH:i:s.v\Z'),
+            'ts' => $ts,
             'url' => $url,
             'referrer' => self::str($data['referrer'] ?? null),
             'user_agent' => $withUserAgent ? $ua : null,
@@ -398,6 +457,14 @@ class Client
         }
 
         return $flat;
+    }
+
+    /** A time as UTC ISO 8601 with milliseconds; now when missing or unreadable. */
+    private function iso(mixed $ts): string
+    {
+        $ts = self::time($ts) ?? ($this->clock)();
+
+        return DateTimeImmutable::createFromInterface($ts)->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d\TH:i:s.v\Z');
     }
 
     private static function time(mixed $ts): ?DateTimeInterface

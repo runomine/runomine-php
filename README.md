@@ -57,6 +57,17 @@ ProcessCheckout::dispatch($order, Rom::visitor());
 Rom::track('checkout_completed', context: ['visitor' => $this->visitor]);
 ```
 
+Page views take props too, stored as the page view's dims: each key becomes a breakdown and a filter in Traffic
+(`area` feeds the Areas breakdown). Same rules as events: flat, up to 20 keys, string or number values. With the
+middleware, a controller sets them on the request; when you record the page view yourself (with
+`middleware => false`, or for pages the middleware doesn't see), pass them along:
+
+```php
+$request->attributes->set('runomine.props', ['section' => 'news']);              // the middleware sends them
+
+Rom::pageview($request, ['props' => ['section' => 'news', 'area' => 'public']]);  // or by hand
+```
+
 Publish the config if you want to change the defaults:
 
 ```sh
@@ -79,6 +90,7 @@ $rom->pageview([
     'ip' => $_SERVER['REMOTE_ADDR'],            // hashed here, never sent
     'country' => $_SERVER['HTTP_CF_IPCOUNTRY'] ?? null,
     'user' => $_SESSION['user_id'] ?? null,
+    'props' => ['section' => 'news'],         // optional, stored as the page view's dims
 ]);
 
 // Anywhere:
@@ -97,6 +109,24 @@ $rom->flush();
 
 Only record what the visitor actually saw: `GET` requests answered `200` with `text/html`. Long-running workers
 should call `$rom->flush()` after each unit of work.
+
+### Samples: your app's own numbers on the Live page
+
+From a scheduled command, a few times a minute: queue depth, CPU, people on the site right now. Nested arrays become
+dotted keys (`queue.pending`), booleans 0/1, anything that isn't a number is dropped. Sent at once to
+`POST /api/v1/samples` (not queued), with the same retries; one sample per second (sending a `ts` again replaces it),
+any age.
+
+```php
+$ok = Rom::sample(['queue' => ['pending' => 3, 'failed' => 0], 'healthy' => true]);       // or $client->sample(...)
+$ok = Rom::sample(['cpu' => 0.12], new DateTimeImmutable('2026-10-14 10:00:00Z'));        // measured earlier
+
+// A catch-up, in calls of at most 500:
+$ok = $client->samples([['ts' => '2026-10-14T10:00:00Z', 'data' => ['cpu' => 0.1]], ['ts' => '2026-10-14T10:01:00Z', 'data' => ['cpu' => 0.2]]]);
+```
+
+`true` means runomine took the call; `false` that the client is disabled or the call failed after the retries, so a
+cursor-based push knows not to advance. Never throws.
 
 ## Revenue from your payment provider
 
@@ -282,8 +312,11 @@ public function test_the_home_page_counts(): void
 ```
 
 Also: `assertNothingTracked()`, `assertNoPageviews()`, and `events()`, `tracked('name')`, `pageviews()` to inspect the
-exact payloads that would have been sent. Nothing leaves the test. To switch runomine off in tests without faking it,
-set `RUNOMINE_ENABLED=false` in `phpunit.xml`.
+exact payloads that would have been sent (a page view's props are in `$event['props']`). Nothing leaves the test.
+To switch runomine off in tests without faking it, set `RUNOMINE_ENABLED=false` in `phpunit.xml`.
+
+Samples are recorded too: `sampled()` lists them as sent (`['ts' => …, 'data' => […]]`), with
+`assertSampled(fn (array $sample) => ($sample['data']['healthy'] ?? null) === true)` and `assertNothingSampled()`.
 
 ### Plain PHP: `FakeSender`
 
@@ -295,6 +328,7 @@ $client->track('signup');
 $client->flush();
 
 $sender->events();   // the events, as sent
+$sender->samples();  // the samples, as sent
 $sender->requests(); // url, headers, body of every call
 ```
 

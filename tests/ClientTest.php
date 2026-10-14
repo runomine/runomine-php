@@ -155,6 +155,74 @@ final class ClientTest extends TestCase
         self::assertArrayNotHasKey('revenue', $event);
     }
 
+    public function test_a_pageview_carries_its_props_with_the_same_rules_as_events(): void
+    {
+        $sender = new FakeSender();
+        $client = $this->client($sender);
+
+        $client->pageview(['url' => 'https://example.com/news', 'ip' => VisitorHashTest::IP, 'user_agent' => VisitorHashTest::UA,
+            'props' => ['section' => 'news', 'team' => 7, 'live' => false, 'nested' => ['a' => 1], 'none' => null, 0 => 'list']]);
+        $client->pageview(['url' => 'https://example.com/', 'ip' => VisitorHashTest::IP, 'props' => []]);
+        $client->pageview(['url' => 'https://example.com/', 'ip' => VisitorHashTest::IP, 'props' => 'not an array']);
+        $client->flush();
+
+        [$first, $second, $third] = $sender->events();
+        self::assertSame(['section' => 'news', 'team' => 7, 'live' => 'false'], $first['props']);
+        self::assertSame(['id', 'type', 'ts', 'url', 'user_agent', 'visitor', 'props'], array_keys($first));
+        self::assertArrayNotHasKey('props', $second);
+        self::assertArrayNotHasKey('props', $third);
+    }
+
+    public function test_samples_are_sent_at_once_to_their_own_endpoint(): void
+    {
+        $sender = new FakeSender();
+        $client = $this->client($sender, ['url' => 'https://runomine.test/']);
+
+        self::assertTrue($client->sample(['queue' => ['pending' => 3], 'healthy' => true]));
+        self::assertTrue($client->sample([], '2026-10-13T20:00:00+02:00'));
+        self::assertTrue($client->sample(['cpu' => 0.5], new DateTimeImmutable('@1760000000')));
+        self::assertSame([], $client->pending(), 'not queued with the events');
+
+        self::assertCount(3, $sender->requests());
+        $request = $sender->requests()[0];
+        self::assertSame('https://runomine.test/api/v1/samples', $request['url']);
+        self::assertSame('Bearer '.VisitorHashTest::TOKEN, $request['headers']['Authorization']);
+        self::assertSame('{"samples":[{"ts":"2026-10-13T18:04:05.123Z","data":{"queue":{"pending":3},"healthy":true}}]}', $request['body']);
+        self::assertSame('{"samples":[{"ts":"2026-10-13T18:00:00.000Z","data":{}}]}', $sender->requests()[1]['body']);
+        self::assertSame([
+            ['ts' => '2026-10-13T18:04:05.123Z', 'data' => ['queue' => ['pending' => 3], 'healthy' => true]],
+            ['ts' => '2026-10-13T18:00:00.000Z', 'data' => []],
+            ['ts' => '2025-10-09T08:53:20.000Z', 'data' => ['cpu' => 0.5]],
+        ], $sender->samples());
+        self::assertSame([], $sender->events());
+    }
+
+    public function test_many_samples_go_in_calls_of_at_most_500_and_report_failure(): void
+    {
+        $sender = new FakeSender([202, 400]);
+        $client = $this->client($sender);
+
+        $rows = array_map(fn ($i) => ['ts' => 1760000000 + $i * 60, 'data' => ['n' => $i]], range(1, 501));
+        self::assertFalse($client->samples([...$rows, 'junk', ['ts' => 1]]));
+        self::assertSame([500, 1], array_map(fn ($r) => count($r['payload']['samples']), $sender->requests()));
+
+        // Retried like events, then false.
+        $sender = new FakeSender([503, 503, 503]);
+        self::assertFalse($this->client($sender)->sample(['cpu' => 1]));
+        self::assertCount(3, $sender->requests());
+        self::assertTrue($this->client(new FakeSender([503, 202]))->sample(['cpu' => 1]));
+        self::assertTrue($client->samples([]));
+    }
+
+    public function test_samples_do_nothing_when_disabled(): void
+    {
+        $sender = new FakeSender();
+        $client = $this->client($sender, ['enabled' => false]);
+
+        self::assertFalse($client->sample(['cpu' => 1]));
+        self::assertSame([], $sender->requests());
+    }
+
     public function test_ts_can_be_given(): void
     {
         $sender = new FakeSender();

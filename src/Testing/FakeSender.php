@@ -56,4 +56,21 @@ final class FakeSender implements Sender
 
         return $events;
     }
+
+    /**
+     * Every sample in every request to /api/v1/samples, in order (a retried call appears once per attempt).
+     *
+     * @return list<array{ts: string, data: array<string, mixed>}>
+     */
+    public function samples(): array
+    {
+        $samples = [];
+        foreach ($this->requests as $request) {
+            foreach ($request['payload']['samples'] ?? [] as $sample) {
+                $samples[] = $sample;
+            }
+        }
+
+        return $samples;
+    }
 }

@@ -62,6 +62,34 @@ class RomFake extends Tracker
         ));
     }
 
+    /**
+     * Every sample sent so far, as it was sent: ['ts' => ISO 8601, 'data' => [...]].
+     *
+     * @return list<array{ts: string, data: array<string, mixed>}>
+     */
+    public function sampled(?callable $callback = null): array
+    {
+        return array_values(array_filter(
+            $this->sender->samples(),
+            fn (array $s) => $callback === null || $callback($s),
+        ));
+    }
+
+    /** @param (callable(array{ts: string, data: array<string, mixed>}): bool)|null $callback */
+    public function assertSampled(?callable $callback = null): static
+    {
+        PHPUnit::assertNotEmpty($this->sampled($callback), 'The expected sample was not sent.');
+
+        return $this;
+    }
+
+    public function assertNothingSampled(): static
+    {
+        PHPUnit::assertEmpty($this->sampled(), 'Samples were sent unexpectedly.');
+
+        return $this;
+    }
+
     /** @param (callable(array<string, mixed>): bool)|null $callback receives the event array */
     public function assertTracked(string $name, ?callable $callback = null): static
     {

@@ -13,6 +13,8 @@ use Runomine\Laravel\Tracker;
  *
  * @method static array|null track(string $name, array $props = [], ?array $revenue = null, string|int|null $user = null, ?array $context = null)
  * @method static array|null pageview(?\Illuminate\Http\Request $request = null, array $overrides = [])
+ * @method static bool sample(array $data, \DateTimeInterface|string|int|null $ts = null)
+ * @method static bool samples(iterable $samples)
  * @method static string|null visitor(?\Illuminate\Http\Request $request = null)
  * @method static array<string, string> checkoutMetadata(string|int|null $user = null)
  * @method static int flush()
