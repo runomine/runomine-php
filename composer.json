@@ -1,0 +1,49 @@
+{
+    "name": "runomine/runomine-php",
+    "description": "Cookieless, server-side analytics for runomine: pageviews, business events and revenue. Framework-agnostic client plus Laravel integration.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["analytics", "cookieless", "privacy", "laravel", "runomine"],
+    "homepage": "https://runomine.com",
+    "support": {
+        "issues": "https://github.com/runomine/runomine-php/issues",
+        "source": "https://github.com/runomine/runomine-php"
+    },
+    "require": {
+        "php": "^8.2",
+        "ext-curl": "*",
+        "ext-json": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.5 || ^11.0 || ^12.0",
+        "orchestra/testbench": "^8.0 || ^9.0 || ^10.0 || ^11.0"
+    },
+    "suggest": {
+        "laravel/framework": "For the service provider, the TrackPageViews middleware and the Rom facade (Laravel 10+)."
+    },
+    "autoload": {
+        "psr-4": {
+            "Runomine\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Runomine\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Runomine\\Laravel\\RunomineServiceProvider"
+            ],
+            "aliases": {
+                "Rom": "Runomine\\Laravel\\Facades\\Rom"
+            }
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
